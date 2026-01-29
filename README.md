@@ -6,6 +6,7 @@ A Windows application to map/remap Bluetooth button inputs (like Play/Pause) to 
 
 - **Gesture Recognition**: Single, Double, and Triple tap detection on the Play/Pause button.
 - **Custom Remapping**: Map gestures and buttons to actions like Scroll, Volume, Track Navigation, and Lock Screen.
+- **Target Device Selection**: Choose a specific Bluetooth device to apply the remapping to.
 - **Auto-Start**: Option to start automatically with Windows.
 
 ## Installation

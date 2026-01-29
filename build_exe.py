@@ -20,5 +20,11 @@ PyInstaller.__main__.run([
     '--windowed',
     '--clean',
     f'--add-data={ctk_path}{SEP}customtkinter',
+    '--hidden-import=pynput.keyboard._win32',
+    '--hidden-import=pynput.mouse._win32',
+    '--hidden-import=keyboard',
+    '--hidden-import=pyautogui',
+    '--hidden-import=PIL',
+    '--hidden-import=PIL._tkinter_finder',
     '--log-level=INFO'
 ])

@@ -1,11 +1,15 @@
 import threading
 import sys
+import multiprocessing
 from .config_manager import ConfigManager
 from .bluetooth_manager import BluetoothManager
 from .gesture_engine import GestureEngine
 from .ui import BluetoothBudsControlApp
 
 def main():
+    # PyInstaller boilerplate for Windows multiprocessing support
+    multiprocessing.freeze_support()
+
     print("Starting Bluetooth Buds Control...")
 
     # Initialize Managers

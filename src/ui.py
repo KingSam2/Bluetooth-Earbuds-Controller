@@ -1,6 +1,7 @@
 import customtkinter as ctk
 import threading
 import time
+import keyboard
 from .config_manager import ConfigManager
 from .bluetooth_manager import BluetoothManager
 
@@ -17,29 +18,37 @@ class BluetoothBudsControlApp(ctk.CTk):
         self.on_save_callback = on_save_callback
 
         self.title("Bluetooth Buds Control")
-        self.geometry("600x650")
+        self.geometry("600x700") # Increased height for tabs
         self.resizable(False, False)
 
-        # Main layout container
-        self.main_frame = ctk.CTkFrame(self)
-        self.main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        # Tab Control
+        self.tab_view = ctk.CTkTabview(self)
+        self.tab_view.pack(fill="both", expand=True, padx=20, pady=20)
 
-        # Header
-        self._create_header()
+        self.settings_tab = self.tab_view.add("Settings")
+        self.debug_tab = self.tab_view.add("Input Debugger")
+
+        # --- Settings Tab ---
+
+        # Header (in settings tab)
+        self._create_header(self.settings_tab)
 
         # Device Selection
-        self._create_device_selection()
+        self._create_device_selection(self.settings_tab)
 
         # Gesture Settings
-        self._create_gesture_settings()
+        self._create_gesture_settings(self.settings_tab)
 
         # Additional Options
-        self._create_options()
+        self._create_options(self.settings_tab)
 
         # Footer / Buttons
-        self._create_footer()
+        self._create_footer(self.settings_tab)
 
-        # Status Bar
+        # --- Debug Tab ---
+        self._create_debug_tab(self.debug_tab)
+
+        # Status Bar (global)
         self._create_status_bar()
 
         # Load initial values
@@ -48,8 +57,12 @@ class BluetoothBudsControlApp(ctk.CTk):
         # Start status update loop
         self.after(2000, self._update_status)
 
-    def _create_header(self):
-        header_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        # Debug state
+        self.is_debugging = False
+        self.debug_hook = None
+
+    def _create_header(self, parent):
+        header_frame = ctk.CTkFrame(parent, fg_color="transparent")
         header_frame.pack(fill="x", pady=(0, 20))
 
         # Icon placeholder (Text for now)
@@ -62,8 +75,8 @@ class BluetoothBudsControlApp(ctk.CTk):
         desc_label = ctk.CTkLabel(header_frame, text="Remap your Bluetooth earbud gestures to system actions.", text_color="gray")
         desc_label.pack(side="top", anchor="w")
 
-    def _create_device_selection(self):
-        self.device_frame = ctk.CTkFrame(self.main_frame)
+    def _create_device_selection(self, parent):
+        self.device_frame = ctk.CTkFrame(parent)
         self.device_frame.pack(fill="x", pady=(0, 20))
 
         label = ctk.CTkLabel(self.device_frame, text="Target Bluetooth Device", font=("Arial", 14, "bold"))
@@ -94,21 +107,21 @@ class BluetoothBudsControlApp(ctk.CTk):
         elif devices and devices[0] != "No Devices Found":
             self.device_var.set(devices[0])
 
-    def _create_gesture_settings(self):
-        self.gesture_frame = ctk.CTkFrame(self.main_frame)
+    def _create_gesture_settings(self, parent):
+        self.gesture_frame = ctk.CTkFrame(parent)
         self.gesture_frame.pack(fill="x", pady=(0, 20))
 
         title_label = ctk.CTkLabel(self.gesture_frame, text="Gesture Settings", font=("Arial", 14, "bold"))
         title_label.pack(anchor="w", padx=10, pady=(10, 5))
 
         # Rows
-        self.single_tap_var = self._create_gesture_row("👆 Single Tap", "single_tap")
-        self.double_tap_var = self._create_gesture_row("✌️ Double Tap", "double_tap")
-        self.triple_tap_var = self._create_gesture_row("🤟 Triple Tap", "triple_tap")
-        self.long_press_var = self._create_gesture_row("🔒 Long Press", "long_press")
+        self.single_tap_var = self._create_gesture_row(self.gesture_frame, "👆 Single Tap", "single_tap")
+        self.double_tap_var = self._create_gesture_row(self.gesture_frame, "✌️ Double Tap", "double_tap")
+        self.triple_tap_var = self._create_gesture_row(self.gesture_frame, "🤟 Triple Tap", "triple_tap")
+        self.long_press_var = self._create_gesture_row(self.gesture_frame, "🔒 Long Press", "long_press")
 
-    def _create_gesture_row(self, label_text, config_key):
-        row_frame = ctk.CTkFrame(self.gesture_frame, fg_color="transparent")
+    def _create_gesture_row(self, parent, label_text, config_key):
+        row_frame = ctk.CTkFrame(parent, fg_color="transparent")
         row_frame.pack(fill="x", padx=10, pady=5)
 
         label = ctk.CTkLabel(row_frame, text=label_text, width=120, anchor="w")
@@ -124,8 +137,8 @@ class BluetoothBudsControlApp(ctk.CTk):
 
         return var
 
-    def _create_options(self):
-        self.options_frame = ctk.CTkFrame(self.main_frame)
+    def _create_options(self, parent):
+        self.options_frame = ctk.CTkFrame(parent)
         self.options_frame.pack(fill="x", pady=(0, 20))
 
         title_label = ctk.CTkLabel(self.options_frame, text="Additional Options", font=("Arial", 14, "bold"))
@@ -139,8 +152,8 @@ class BluetoothBudsControlApp(ctk.CTk):
         self.start_check = ctk.CTkCheckBox(self.options_frame, text="Start with Windows", variable=self.start_var)
         self.start_check.pack(anchor="w", padx=10, pady=5)
 
-    def _create_footer(self):
-        footer_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+    def _create_footer(self, parent):
+        footer_frame = ctk.CTkFrame(parent, fg_color="transparent")
         footer_frame.pack(fill="x", pady=10)
 
         cancel_btn = ctk.CTkButton(footer_frame, text="Cancel", fg_color="transparent", border_width=1, text_color=("gray10", "#DCE4EE"), command=self.destroy)
@@ -148,6 +161,55 @@ class BluetoothBudsControlApp(ctk.CTk):
 
         save_btn = ctk.CTkButton(footer_frame, text="Save", command=self._on_save)
         save_btn.pack(side="right")
+
+    def _create_debug_tab(self, parent):
+        # Instructions
+        label = ctk.CTkLabel(parent, text="Press buttons on your Bluetooth device to see what input is detected.", text_color="gray", wraplength=500)
+        label.pack(pady=10)
+
+        # Controls
+        control_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        control_frame.pack(fill="x", pady=5)
+
+        self.debug_btn = ctk.CTkButton(control_frame, text="Start Listening", command=self._toggle_debug)
+        self.debug_btn.pack()
+
+        # Log Area
+        self.debug_log = ctk.CTkTextbox(parent, width=500, height=400)
+        self.debug_log.pack(pady=10, fill="both", expand=True)
+        self.debug_log.insert("0.0", "Logs will appear here...\n")
+
+    def _toggle_debug(self):
+        if not self.is_debugging:
+            self.is_debugging = True
+            self.debug_btn.configure(text="Stop Listening", fg_color="red", hover_color="darkred")
+            self.debug_log.insert("end", "\n--- Listening Started ---\n")
+            self.debug_log.see("end")
+
+            # Start Hook
+            try:
+                self.debug_hook = keyboard.hook(self._on_debug_key_event)
+            except Exception as e:
+                self.debug_log.insert("end", f"Error hooking keyboard: {e}\n")
+        else:
+            self.is_debugging = False
+            self.debug_btn.configure(text="Start Listening", fg_color=("blue", "#1f6aa5")) # Reset color
+            self.debug_log.insert("end", "\n--- Listening Stopped ---\n")
+            self.debug_log.see("end")
+
+            # Stop Hook
+            if self.debug_hook:
+                keyboard.unhook(self.debug_hook)
+                self.debug_hook = None
+
+    def _on_debug_key_event(self, event):
+        # Callback runs in a different thread, so use after() to update UI
+        msg = f"Event: {event.event_type} | Name: {event.name} | Scan Code: {event.scan_code}\n"
+        self.after(0, lambda: self._append_debug_log(msg))
+
+    def _append_debug_log(self, msg):
+        self.debug_log.insert("end", msg)
+        self.debug_log.see("end")
 
     def _create_status_bar(self):
         self.status_bar = ctk.CTkLabel(self, text="Status: Checking...", anchor="w", fg_color=("gray90", "gray20"), padx=10)

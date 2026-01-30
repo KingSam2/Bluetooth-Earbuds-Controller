@@ -1,7 +1,6 @@
 import customtkinter as ctk
 import threading
 import time
-import asyncio
 import keyboard
 import pynput
 try:
@@ -9,12 +8,8 @@ try:
 except ImportError:
     inputs = None
 
-# WinRT imports (Windows only)
-try:
-    from winsdk.windows.media.control import GlobalSystemMediaTransportControlsSessionManager
-    WINSDK_AVAILABLE = True
-except ImportError:
-    WINSDK_AVAILABLE = False
+# Import our new lightweight Raw Input Monitor
+from .win_raw_input import RawInputMonitor
 
 from .config_manager import ConfigManager
 from .bluetooth_manager import BluetoothManager
@@ -67,7 +62,9 @@ class BluetoothBudsControlApp(ctk.CTk):
         self.mouse_listener = None
         self.gamepad_thread = None
         self.stop_gamepad_thread = False
-        self.stop_smtc_thread = False
+
+        # Raw Input Monitor
+        self.raw_monitor = RawInputMonitor(self._append_debug_log_threadsafe)
 
     def _create_header(self, parent):
         header_frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -166,7 +163,7 @@ class BluetoothBudsControlApp(ctk.CTk):
         save_btn.pack(side="right")
 
     def _create_debug_tab(self, parent):
-        label = ctk.CTkLabel(parent, text="Press buttons on your Bluetooth device to see what input is detected.\nMonitoring: Keyboard, Mouse, Gamepads, System Media (AVRCP).", text_color="gray", wraplength=500)
+        label = ctk.CTkLabel(parent, text="Press buttons on your Bluetooth device to see what input is detected.\nMonitoring: Keyboard, Mouse, Gamepads, Raw HID (Consumer Page).", text_color="gray", wraplength=500)
         label.pack(pady=10)
 
         control_frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -216,12 +213,11 @@ class BluetoothBudsControlApp(ctk.CTk):
         else:
             self._append_debug_log("Warning: 'inputs' library not available.\n")
 
-        # 4. System Media (Winsdk)
-        if WINSDK_AVAILABLE:
-            self.stop_smtc_thread = False
-            threading.Thread(target=self._run_smtc_listener_thread, daemon=True).start()
-        else:
-            self._append_debug_log("Warning: 'winsdk' not available (not on Windows?). System Media monitoring disabled.\n")
+        # 4. Raw Input (Consumer/HID)
+        try:
+            self.raw_monitor.start()
+        except Exception as e:
+            self._append_debug_log(f"Error starting Raw Input Monitor: {e}\n")
 
     def _stop_listeners(self):
         if self.keyboard_listener:
@@ -233,26 +229,34 @@ class BluetoothBudsControlApp(ctk.CTk):
             self.mouse_listener = None
 
         self.stop_gamepad_thread = True
-        self.stop_smtc_thread = True
 
-    # --- Pynput Callbacks ---
+        if self.raw_monitor:
+            self.raw_monitor.stop()
+
+    # --- Callbacks ---
+    def _append_debug_log_threadsafe(self, msg):
+        self.after(0, lambda: self._append_debug_log(msg))
+
+    def _append_debug_log(self, msg):
+        self.debug_log.insert("end", msg)
+        self.debug_log.see("end")
+
     def _on_pynput_press(self, key):
         try:
             msg = f"[Keyboard] Key: {key.char}\n"
         except AttributeError:
             msg = f"[Keyboard] Special Key: {key}\n"
-        self.after(0, lambda: self._append_debug_log(msg))
+        self._append_debug_log_threadsafe(msg)
 
     def _on_pynput_click(self, x, y, button, pressed):
         if pressed:
             msg = f"[Mouse] Click: {button} at ({x}, {y})\n"
-            self.after(0, lambda: self._append_debug_log(msg))
+            self._append_debug_log_threadsafe(msg)
 
     def _on_pynput_scroll(self, x, y, dx, dy):
         msg = f"[Mouse] Scroll: ({dx}, {dy})\n"
-        self.after(0, lambda: self._append_debug_log(msg))
+        self._append_debug_log_threadsafe(msg)
 
-    # --- Gamepad Polling ---
     def _poll_gamepads(self):
         while not self.stop_gamepad_thread:
             try:
@@ -261,76 +265,9 @@ class BluetoothBudsControlApp(ctk.CTk):
                     if self.stop_gamepad_thread:
                         break
                     msg = f"[HID/Gamepad] Code: {event.code}, State: {event.state}, Type: {event.ev_type}\n"
-                    self.after(0, lambda m=msg: self._append_debug_log(m))
+                    self._append_debug_log_threadsafe(msg)
             except Exception:
                 time.sleep(0.1)
-
-    # --- WinRT SMTC Listener ---
-    def _run_smtc_listener_thread(self):
-        # Asyncio loop must run in this thread
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        try:
-            loop.run_until_complete(self._smtc_listener_task())
-        except Exception as e:
-            self.after(0, lambda: self._append_debug_log(f"[SMTC] Error: {e}\n"))
-        finally:
-            loop.close()
-
-    async def _smtc_listener_task(self):
-        # Get Session Manager
-        manager = await GlobalSystemMediaTransportControlsSessionManager.request_async()
-        if not manager:
-            self.after(0, lambda: self._append_debug_log("[SMTC] Failed to get session manager.\n"))
-            return
-
-        self.after(0, lambda: self._append_debug_log("[SMTC] Connected to Windows Media Manager.\n"))
-
-        # We can't easily "hook" events with a simple blocking call in WinRT like 'keyboard'.
-        # We need to register callbacks and keep the loop alive.
-        # However, Python winsdk might implement callbacks differently.
-        # Usually: manager.add_current_session_changed(callback)
-
-        def on_session_changed(sender, args):
-            self.after(0, lambda: self._append_debug_log("[SMTC] Session Changed.\n"))
-            # We would need to re-subscribe to the new session's events here.
-            # For simplicity, we just poll active session in loop for this MVP debugger.
-
-        manager.add_current_session_changed(on_session_changed)
-
-        # Polling loop to check status (as event callbacks across threads can be flaky in Py+WinRT)
-        # This is a robust fallback to detect changes.
-        last_status = None
-        last_timeline = 0
-
-        while not self.stop_smtc_thread:
-            session = manager.get_current_session()
-            if session:
-                try:
-                    info = session.get_playback_info()
-                    props = await session.try_get_media_properties_async()
-
-                    status = info.playback_status # Closed, Opened, Changing, Stopped, Playing, Paused
-
-                    # Log if status changed
-                    if status != last_status:
-                        msg = f"[SMTC] Status: {status} | Title: {props.title if props else 'Unknown'}\n"
-                        self.after(0, lambda m=msg: self._append_debug_log(m))
-                        last_status = status
-
-                    # Timeline check (if detecting track changes/scrubbing, roughly)
-                    # Note: Detecting "Next Track" press via SMTC is hard because SMTC reflects the STATE, not the EVENT.
-                    # If you press "Next", the title changes.
-
-                except Exception:
-                    pass
-
-            await asyncio.sleep(0.2)
-
-    def _append_debug_log(self, msg):
-        self.debug_log.insert("end", msg)
-        self.debug_log.see("end")
 
     def _create_status_bar(self):
         self.status_bar = ctk.CTkLabel(self, text="Status: Checking...", anchor="w", fg_color=("gray90", "gray20"), padx=10)

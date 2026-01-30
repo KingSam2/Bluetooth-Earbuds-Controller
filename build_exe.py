@@ -27,7 +27,5 @@ PyInstaller.__main__.run([
     '--hidden-import=PIL',
     '--hidden-import=PIL._tkinter_finder',
     '--hidden-import=inputs',
-    '--hidden-import=winsdk',
-    '--hidden-import=winsdk.windows.media.control',
     '--log-level=INFO'
 ])

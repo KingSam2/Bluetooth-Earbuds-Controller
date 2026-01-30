@@ -42,7 +42,24 @@ else:
     HID_USAGE_PAGE_CONSUMER = 0x0C
     HID_USAGE_CONSUMER_CONTROL = 0x01
 
-    # Structures
+    # --- Structure Definitions ---
+    # Manually define WNDCLASS because ctypes.wintypes often misses it
+    WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_long, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+
+    class WNDCLASS(ctypes.Structure):
+        _fields_ = [
+            ("style", wintypes.UINT),
+            ("lpfnWndProc", WNDPROC),
+            ("cbClsExtra", ctypes.c_int),
+            ("cbWndExtra", ctypes.c_int),
+            ("hInstance", wintypes.HINSTANCE),
+            ("hIcon", wintypes.HICON),
+            ("hCursor", wintypes.HICON),
+            ("hbrBackground", wintypes.HBRUSH),
+            ("lpszMenuName", wintypes.LPCWSTR),
+            ("lpszClassName", wintypes.LPCWSTR)
+        ]
+
     class RAWINPUTDEVICE(ctypes.Structure):
         _fields_ = [
             ("usUsagePage", wintypes.USHORT),
@@ -79,7 +96,7 @@ else:
     class RAWMOUSE(ctypes.Structure):
         _fields_ = [
             ("usFlags", wintypes.USHORT),
-            ("ulButtons", wintypes.ULONG), # Union in C, simplified here
+            ("ulButtons", wintypes.ULONG),
             ("ulRawButtons", wintypes.ULONG),
             ("lLastX", wintypes.LONG),
             ("lLastY", wintypes.LONG),
@@ -97,9 +114,6 @@ else:
             ("header", RAWINPUTHEADER),
             ("data", RAWKEYBOARD),
         ]
-
-    # Callback type
-    WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_long, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
     class RawInputMonitor:
         def __init__(self, callback):
@@ -121,7 +135,7 @@ else:
 
         def _run_loop(self):
             # 1. Create Message-Only Window
-            wc = wintypes.WNDCLASS()
+            wc = WNDCLASS()
             wc.lpfnWndProc = WNDPROC(self._wnd_proc)
             wc.lpszClassName = "RawInputMonitorClass"
             wc.hInstance = kernel32.GetModuleHandleW(None)
@@ -172,13 +186,9 @@ else:
             header = RAWINPUTHEADER()
             size = ctypes.c_uint(ctypes.sizeof(header))
 
-            # This is a simplification; normally we call GetRawInputData twice.
-            # But let's assume we want to read the header type first.
-
-            # Correct approach:
             dwSize = ctypes.c_uint(0)
             if user32.GetRawInputData(hrawinput, RID_INPUT, None, ctypes.byref(dwSize), ctypes.sizeof(RAWINPUTHEADER)) != 0:
-                return # Should return 0 on success of getting size
+                return
 
             # Allocate buffer
             buffer = ctypes.create_string_buffer(dwSize.value)
@@ -194,17 +204,13 @@ else:
                 msg = f"[Raw Keyboard] MakeCode: {kbd.MakeCode}, VKey: {kbd.VKey}, Message: {kbd.Message}"
 
             elif raw.header.dwType == RIM_TYPEHID:
-                # Need to cast to HID struct (careful with variable size bRawData)
-                # We interpret it manually
                 raw_hid = ctypes.cast(buffer, ctypes.POINTER(RAWINPUT_HID)).contents
                 count = raw_hid.hid.dwCount
                 size_hid = raw_hid.hid.dwSizeHid
                 total_bytes = count * size_hid
 
                 # Get pointer to byte array
-                # The bRawData in struct definition is just 1 byte placeholder.
-                # Address of bRawData:
-                base_addr = ctypes.addressof(raw_hid.hid) + ctypes.sizeof(ctypes.c_ulong) * 2 # Offset of bRawData
+                base_addr = ctypes.addressof(raw_hid.hid) + ctypes.sizeof(ctypes.c_ulong) * 2
 
                 data_bytes = (ctypes.c_byte * total_bytes).from_address(base_addr)
                 hex_str = " ".join([f"{b:02X}" for b in data_bytes])

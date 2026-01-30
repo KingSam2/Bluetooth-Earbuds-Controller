@@ -9,7 +9,7 @@ except ImportError:
     inputs = None
 
 # Import our new lightweight Raw Input Monitor
-from .win_raw_input import RawInputMonitor
+from .win_raw_input import RawInputMonitor, enumerate_devices
 
 from .config_manager import ConfigManager
 from .bluetooth_manager import BluetoothManager
@@ -191,6 +191,9 @@ class BluetoothBudsControlApp(ctk.CTk):
         self.debug_btn = ctk.CTkButton(control_frame, text="Start Listening", command=self._toggle_debug)
         self.debug_btn.pack(pady=5)
 
+        self.scan_btn = ctk.CTkButton(control_frame, text="Scan Input Devices", command=self._scan_devices, fg_color="teal")
+        self.scan_btn.pack(pady=5)
+
         self.clear_debug_btn = ctk.CTkButton(control_frame, text="Clear Log", command=self._clear_debug_log, fg_color="gray")
         self.clear_debug_btn.pack(pady=5)
 
@@ -323,6 +326,18 @@ class BluetoothBudsControlApp(ctk.CTk):
                     self._queue_debug_log(msg)
             except Exception:
                 time.sleep(0.1)
+
+    def _scan_devices(self):
+        self._queue_debug_log("\n--- Scanning for HID Devices ---\n")
+
+        # Run in thread to prevent freezing
+        def scan_task():
+            devices = enumerate_devices()
+            for dev in devices:
+                self._queue_debug_log(f"{dev}\n")
+            self._queue_debug_log("--- Scan Complete ---\n")
+
+        threading.Thread(target=scan_task, daemon=True).start()
 
     def _create_status_bar(self):
         self.status_bar = ctk.CTkLabel(self, text="Status: Checking...", anchor="w", fg_color=("gray90", "gray20"), padx=10)

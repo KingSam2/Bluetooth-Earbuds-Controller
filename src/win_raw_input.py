@@ -19,6 +19,10 @@ if platform.system() != "Windows":
         def _mock_loop(self):
             while self.running:
                 time.sleep(1)
+
+    def enumerate_devices():
+        return ["Mock Device 1", "Mock Device 2 (Bluetooth)"]
+
 else:
     # Windows Implementation
     user32 = ctypes.windll.user32
@@ -31,6 +35,7 @@ else:
     RIM_TYPEHID = 2
     RIDEV_INPUTSINK = 0x00000100
     RID_INPUT = 0x10000003
+    RIDI_DEVICENAME = 0x20000007
 
     # Usage Pages
     HID_USAGE_PAGE_GENERIC = 0x01
@@ -43,7 +48,6 @@ else:
     HID_USAGE_CONSUMER_CONTROL = 0x01
 
     # --- Structure Definitions ---
-    # Manually define WNDCLASS because ctypes.wintypes often misses it
     WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_long, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
     class WNDCLASS(ctypes.Structure):
@@ -66,6 +70,12 @@ else:
             ("usUsage", wintypes.USHORT),
             ("dwFlags", wintypes.DWORD),
             ("hwndTarget", wintypes.HWND),
+        ]
+
+    class RAWINPUTDEVICELIST(ctypes.Structure):
+        _fields_ = [
+            ("hDevice", wintypes.HANDLE),
+            ("dwType", wintypes.DWORD),
         ]
 
     class RAWINPUTHEADER(ctypes.Structure):
@@ -114,6 +124,47 @@ else:
             ("header", RAWINPUTHEADER),
             ("data", RAWKEYBOARD),
         ]
+
+    def enumerate_devices():
+        """Returns a list of connected Input Device names."""
+        ui_list = []
+
+        # 1. Get Device Count
+        count = ctypes.c_uint(0)
+        if user32.GetRawInputDeviceList(None, ctypes.byref(count), ctypes.sizeof(RAWINPUTDEVICELIST)) != 0:
+            return ["Error: Failed to get device count."]
+
+        if count.value == 0:
+            return ["No devices found."]
+
+        # 2. Get Device List
+        devices = (RAWINPUTDEVICELIST * count.value)()
+        if user32.GetRawInputDeviceList(devices, ctypes.byref(count), ctypes.sizeof(RAWINPUTDEVICELIST)) == -1:
+             return ["Error: Failed to get device list."]
+
+        # 3. Iterate and Get Names
+        for i in range(count.value):
+            hDevice = devices[i].hDevice
+            dwType = devices[i].dwType # 0=MOUSE, 1=KBD, 2=HID
+
+            # Get Name Length
+            name_len = ctypes.c_uint(0)
+            user32.GetRawInputDeviceInfoW(hDevice, RIDI_DEVICENAME, None, ctypes.byref(name_len))
+
+            if name_len.value > 0:
+                name_buffer = ctypes.create_unicode_buffer(name_len.value)
+                user32.GetRawInputDeviceInfoW(hDevice, RIDI_DEVICENAME, name_buffer, ctypes.byref(name_len))
+                name = name_buffer.value
+
+                type_str = "UNKNOWN"
+                if dwType == RIM_TYPEMOUSE: type_str = "MOUSE"
+                elif dwType == RIM_TYPEKEYBOARD: type_str = "KEYBOARD"
+                elif dwType == RIM_TYPEHID: type_str = "HID"
+
+                # Filter out generic system devices if too noisy? No, user needs to see everything.
+                ui_list.append(f"[{type_str}] {name}")
+
+        return ui_list
 
     class RawInputMonitor:
         def __init__(self, callback):

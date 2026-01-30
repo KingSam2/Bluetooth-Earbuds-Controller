@@ -26,5 +26,6 @@ PyInstaller.__main__.run([
     '--hidden-import=pyautogui',
     '--hidden-import=PIL',
     '--hidden-import=PIL._tkinter_finder',
+    '--hidden-import=inputs',
     '--log-level=INFO'
 ])

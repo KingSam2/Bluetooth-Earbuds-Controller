@@ -8,6 +8,9 @@ try:
 except ImportError:
     inputs = None
 
+# Import our new lightweight Raw Input Monitor
+from .win_raw_input import RawInputMonitor
+
 from .config_manager import ConfigManager
 from .bluetooth_manager import BluetoothManager
 
@@ -59,6 +62,14 @@ class BluetoothBudsControlApp(ctk.CTk):
         self.mouse_listener = None
         self.gamepad_thread = None
         self.stop_gamepad_thread = False
+
+        # Log Queue
+        self.log_queue = []
+        self.log_lock = threading.Lock()
+        self.after(100, self._process_log_queue)
+
+        # Raw Input Monitor
+        self.raw_monitor = RawInputMonitor(self._queue_debug_log)
 
     def _create_header(self, parent):
         header_frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -157,16 +168,33 @@ class BluetoothBudsControlApp(ctk.CTk):
         save_btn.pack(side="right")
 
     def _create_debug_tab(self, parent):
-        label = ctk.CTkLabel(parent, text="Press buttons on your Bluetooth device to see what input is detected.\nMonitoring: Keyboard, Mouse, Gamepads.", text_color="gray", wraplength=500)
+        label = ctk.CTkLabel(parent, text="Press buttons on your Bluetooth device to see what input is detected.\nMonitoring: Keyboard, Mouse, Gamepads, Raw HID (Consumer Page).", text_color="gray", wraplength=500)
         label.pack(pady=10)
+
+        # Filters
+        filter_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        filter_frame.pack(fill="x", pady=5)
+
+        self.log_mouse_move_var = ctk.BooleanVar(value=False)
+        self.log_mouse_click_var = ctk.BooleanVar(value=True)
+        self.log_kbd_var = ctk.BooleanVar(value=True)
+        self.log_hid_var = ctk.BooleanVar(value=True)
+
+        ctk.CTkCheckBox(filter_frame, text="Mouse Move", variable=self.log_mouse_move_var).pack(side="left", padx=5)
+        ctk.CTkCheckBox(filter_frame, text="Mouse Click", variable=self.log_mouse_click_var).pack(side="left", padx=5)
+        ctk.CTkCheckBox(filter_frame, text="Keyboard", variable=self.log_kbd_var).pack(side="left", padx=5)
+        ctk.CTkCheckBox(filter_frame, text="HID/Raw", variable=self.log_hid_var).pack(side="left", padx=5)
 
         control_frame = ctk.CTkFrame(parent, fg_color="transparent")
         control_frame.pack(fill="x", pady=5)
 
         self.debug_btn = ctk.CTkButton(control_frame, text="Start Listening", command=self._toggle_debug)
-        self.debug_btn.pack()
+        self.debug_btn.pack(pady=5)
 
-        self.debug_log = ctk.CTkTextbox(parent, width=500, height=400)
+        self.clear_debug_btn = ctk.CTkButton(control_frame, text="Clear Log", command=self._clear_debug_log, fg_color="gray")
+        self.clear_debug_btn.pack(pady=5)
+
+        self.debug_log = ctk.CTkTextbox(parent, width=500, height=350)
         self.debug_log.pack(pady=10, fill="both", expand=True)
         self.debug_log.insert("0.0", "Logs will appear here...\n")
 
@@ -174,7 +202,7 @@ class BluetoothBudsControlApp(ctk.CTk):
         if not self.is_debugging:
             self.is_debugging = True
             self.debug_btn.configure(text="Stop Listening", fg_color="red", hover_color="darkred")
-            self.debug_log.insert("end", "\n--- Listening Started (Keyboard, Mouse, HID) ---\n")
+            self.debug_log.insert("end", "\n--- Listening Started (All Sources) ---\n")
             self.debug_log.see("end")
             self._start_listeners()
         else:
@@ -190,14 +218,14 @@ class BluetoothBudsControlApp(ctk.CTk):
             self.keyboard_listener = pynput.keyboard.Listener(on_press=self._on_pynput_press)
             self.keyboard_listener.start()
         except Exception as e:
-            self._append_debug_log(f"Error starting keyboard listener: {e}\n")
+            self._queue_debug_log(f"Error starting keyboard listener: {e}\n")
 
         # 2. Mouse (Pynput)
         try:
-            self.mouse_listener = pynput.mouse.Listener(on_click=self._on_pynput_click, on_scroll=self._on_pynput_scroll)
+            self.mouse_listener = pynput.mouse.Listener(on_move=self._on_pynput_move, on_click=self._on_pynput_click, on_scroll=self._on_pynput_scroll)
             self.mouse_listener.start()
         except Exception as e:
-            self._append_debug_log(f"Error starting mouse listener: {e}\n")
+            self._queue_debug_log(f"Error starting mouse listener: {e}\n")
 
         # 3. Gamepad/HID (inputs)
         if inputs:
@@ -205,7 +233,13 @@ class BluetoothBudsControlApp(ctk.CTk):
             self.gamepad_thread = threading.Thread(target=self._poll_gamepads, daemon=True)
             self.gamepad_thread.start()
         else:
-            self._append_debug_log("Warning: 'inputs' library not available. Gamepad/HID monitoring disabled.\n")
+            self._queue_debug_log("Warning: 'inputs' library not available.\n")
+
+        # 4. Raw Input (Consumer/HID)
+        try:
+            self.raw_monitor.start()
+        except Exception as e:
+            self._queue_debug_log(f"Error starting Raw Input Monitor: {e}\n")
 
     def _stop_listeners(self):
         if self.keyboard_listener:
@@ -217,50 +251,78 @@ class BluetoothBudsControlApp(ctk.CTk):
             self.mouse_listener = None
 
         self.stop_gamepad_thread = True
-        # Thread will exit on next loop
+
+        if self.raw_monitor:
+            self.raw_monitor.stop()
+
+    # --- Callbacks ---
+    def _queue_debug_log(self, msg):
+        with self.log_lock:
+            self.log_queue.append(msg)
+
+    def _process_log_queue(self):
+        with self.log_lock:
+            if self.log_queue:
+                # Flush all messages
+                text = "".join(self.log_queue)
+                self.log_queue.clear()
+
+                # Update UI
+                self.debug_log.insert("end", text)
+                self.debug_log.see("end")
+
+                # Trim buffer if too long
+                content = self.debug_log.get("1.0", "end")
+                if len(content) > 50000: # Max characters
+                    self.debug_log.delete("1.0", "end-10000c") # Delete oldest chars
+
+        self.after(100, self._process_log_queue)
+
+    def _clear_debug_log(self):
+        self.debug_log.delete("1.0", "end")
+        self.debug_log.insert("0.0", "Logs cleared.\n")
 
     def _on_pynput_press(self, key):
+        if not self.log_kbd_var.get(): return
         try:
             msg = f"[Keyboard] Key: {key.char}\n"
         except AttributeError:
             msg = f"[Keyboard] Special Key: {key}\n"
-        self.after(0, lambda: self._append_debug_log(msg))
+        self._queue_debug_log(msg)
+
+    def _on_pynput_move(self, x, y):
+        if not self.log_mouse_move_var.get(): return
+        # Limit move logging frequency? Batching handles it, but still generates string objects.
+        # But user explicitly enabled it, so let it flow.
+        msg = f"[Mouse] Move: ({x}, {y})\n"
+        self._queue_debug_log(msg)
 
     def _on_pynput_click(self, x, y, button, pressed):
+        if not self.log_mouse_click_var.get(): return
         if pressed:
             msg = f"[Mouse] Click: {button} at ({x}, {y})\n"
-            self.after(0, lambda: self._append_debug_log(msg))
+            self._queue_debug_log(msg)
 
     def _on_pynput_scroll(self, x, y, dx, dy):
+        if not self.log_mouse_click_var.get(): return # Group scroll with click for simplicity or add separate var
         msg = f"[Mouse] Scroll: ({dx}, {dy})\n"
-        self.after(0, lambda: self._append_debug_log(msg))
+        self._queue_debug_log(msg)
 
     def _poll_gamepads(self):
         while not self.stop_gamepad_thread:
-            try:
-                # inputs.get_gamepad() blocks, so this is tricky.
-                # We need to poll or handle blocking.
-                # Since we are in a thread, blocking is okay, but stopping is hard.
-                # However, get_gamepad() only returns if there are events.
-                # If no events, it blocks forever.
-                # We'll use get_key() equivalent or just loop.
-                # Actually, inputs.devices.gamepads is a list.
-                # We can iterate over all devices.
+            if not self.log_hid_var.get():
+                time.sleep(0.5)
+                continue
 
+            try:
                 events = inputs.get_gamepad()
                 for event in events:
                     if self.stop_gamepad_thread:
                         break
                     msg = f"[HID/Gamepad] Code: {event.code}, State: {event.state}, Type: {event.ev_type}\n"
-                    self.after(0, lambda m=msg: self._append_debug_log(m))
+                    self._queue_debug_log(msg)
             except Exception:
-                # If no gamepad, this might error or block.
-                # Just sleep to avoid busy loop if it returns empty quickly
                 time.sleep(0.1)
-
-    def _append_debug_log(self, msg):
-        self.debug_log.insert("end", msg)
-        self.debug_log.see("end")
 
     def _create_status_bar(self):
         self.status_bar = ctk.CTkLabel(self, text="Status: Checking...", anchor="w", fg_color=("gray90", "gray20"), padx=10)
